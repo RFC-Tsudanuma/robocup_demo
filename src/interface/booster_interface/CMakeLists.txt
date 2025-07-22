@@ -7,8 +7,11 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
+find_package(rosidl_default_generators REQUIRED 
+  PATHS /opt/ros/$ENV{ROS_DISTRO}/share)
 
 file(GLOB_RECURSE msg_files RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "msg/*.msg")
 rosidl_generate_interfaces(${PROJECT_NAME}
