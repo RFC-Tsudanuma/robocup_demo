@@ -22,6 +22,7 @@
   <depend>booster_interface</depend>
   <depend>booster_msgs</depend>
   <depend>backward_ros</depend>
+  <depend>localization_msgs</depend>
 
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>

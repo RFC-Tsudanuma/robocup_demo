@@ -85,6 +85,7 @@ void Brain::init()
     robotStatusPublisher = create_publisher<std_msgs::msg::String>("/robot_status", 10);
     robotPosePublisher = create_publisher<geometry_msgs::msg::PoseStamped>("/robot_pose", 10);
     visionDataPublisher = create_publisher<vision_interface::msg::Detections>("/vision_data", 10);
+    localizationResultPublisher = create_publisher<localization_msgs::msg::LocalizationResult>("/localization_result", 10);
 
 }
 
@@ -785,6 +786,7 @@ void Brain::processExternalActionDecision()
     publishRobotStatus();
     publishRobotPose();
     publishVisionData();
+    publishLocalizationResult();
 }
 
 void Brain::externalActionDecisionCallback(const std_msgs::msg::String &msg)
@@ -895,4 +897,70 @@ void Brain::publishVisionData()
         // The vision data is already being processed in detectionsCallback
         // You can add additional processing here if needed
     }
+}
+
+void Brain::publishLocalizationResult()
+{
+    auto localization_msg = std::make_unique<localization_msgs::msg::LocalizationResult>();
+    
+    // Set header
+    localization_msg->header.stamp = get_clock()->now();
+    localization_msg->header.frame_id = "map";
+    
+    // Set pose with covariance
+    localization_msg->pose.x = data->robotPoseToField.x;
+    localization_msg->pose.y = data->robotPoseToField.y;
+    localization_msg->pose.theta = data->robotPoseToField.theta;
+    
+    // Set simplified covariance matrix (3x3 for x, y, theta)
+    // Initialize with zeros
+    for (int i = 0; i < 9; i++) {
+        localization_msg->pose.covariance[i] = 0.0;
+    }
+    
+    // Set diagonal values (variance estimates)
+    // These values can be adjusted based on your localization accuracy
+    localization_msg->pose.covariance[0] = 0.1;  // x variance
+    localization_msg->pose.covariance[4] = 0.1;  // y variance  
+    localization_msg->pose.covariance[8] = 0.05; // theta variance
+    
+    // Set confidence based on available sensor data
+    double confidence = 0.5; // Base confidence
+    
+    // Increase confidence if ball is detected (vision system working)
+    if (data->ballDetected) {
+        confidence += 0.2;
+    }
+    
+    // Increase confidence based on number of markings detected
+    if (data->markings.size() > 0) {
+        confidence += 0.1 * std::min(3.0, static_cast<double>(data->markings.size()));
+    }
+    
+    // Check if localization was recently successful
+    double time_since_last_localize = (get_clock()->now() - data->lastSuccessfulLocalizeTime).seconds();
+    if (time_since_last_localize < 5.0) {
+        confidence += 0.2;
+    }
+    
+    localization_msg->confidence = std::min(1.0, confidence);
+    
+    // Set processing time (simplified estimation)
+    localization_msg->processing_time_ms = 5; // Rough estimate for odometry-based localization
+    
+    // Set convergence based on confidence
+    localization_msg->convergence = (localization_msg->confidence > 0.7);
+    
+    // Set error code (0: success, others: various error conditions)
+    localization_msg->error_code = 0; // Success
+    
+    // If confidence is very low, indicate potential error
+    if (localization_msg->confidence < 0.3) {
+        localization_msg->error_code = 1; // Low confidence error
+    }
+    
+    localizationResultPublisher->publish(*localization_msg);
+    
+    RCLCPP_DEBUG(get_logger(), "Published localization result: x=%.2f, y=%.2f, theta=%.2f, confidence=%.2f", 
+                localization_msg->pose.x, localization_msg->pose.y, localization_msg->pose.theta, localization_msg->confidence);
 }

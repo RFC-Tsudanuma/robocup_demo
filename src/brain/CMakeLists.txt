@@ -22,6 +22,7 @@ find_package(booster_interface REQUIRED)
 find_package(booster_msgs REQUIRED)
 find_package(game_controller_interface REQUIRED)
 find_package(vision_interface REQUIRED)
+find_package(localization_msgs REQUIRED)
 
 # source files
 file(GLOB SOURCE_FILES src/*.cpp)
@@ -36,7 +37,7 @@ target_link_libraries(brain_node ${backward_ros_LIBRARIES})
 ament_target_dependencies(brain_node rclcpp std_msgs sensor_msgs geometry_msgs
   OpenCV EIGEN3
   # behaviortree_cpp  # Removed behavior tree
-  booster_msgs booster_interface game_controller_interface vision_interface)
+  booster_msgs booster_interface game_controller_interface vision_interface localization_msgs)
 
 target_include_directories(brain_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

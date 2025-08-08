@@ -10,6 +10,7 @@
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <vision_interface/msg/detections.hpp>
 #include <game_controller_interface/msg/game_control_data.hpp>
+#include <localization_msgs/msg/localization_result.hpp>
 #include <booster/robot/b1/b1_api_const.hpp>
 
 #include "booster_interface/msg/odometer.hpp"
@@ -115,10 +116,12 @@ private:
     rclcpp::Publisher<std_msgs::msg::String>::SharedPtr robotStatusPublisher;
     rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr robotPosePublisher;
     rclcpp::Publisher<vision_interface::msg::Detections>::SharedPtr visionDataPublisher;
+    rclcpp::Publisher<localization_msgs::msg::LocalizationResult>::SharedPtr localizationResultPublisher;
 
     // Publishing functions for external decision-making package
     void publishRobotStatus();
     void publishRobotPose();
     void publishVisionData();
+    void publishLocalizationResult();
 
 };
