@@ -14,8 +14,8 @@ find_package(geometry_msgs REQUIRED)
 
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
-find_package(behaviortree_cpp REQUIRED)
-find_package(rerun_sdk REQUIRED)
+# find_package(behaviortree_cpp REQUIRED)  # Removed behavior tree dependency
+# find_package(rerun_sdk REQUIRED)  # Removed rerun dependency
 find_package(backward_ros REQUIRED)
 
 find_package(booster_interface REQUIRED)
@@ -25,13 +25,17 @@ find_package(vision_interface REQUIRED)
 
 # source files
 file(GLOB SOURCE_FILES src/*.cpp)
+# Remove brain_tree.cpp from the source files list since it was deleted
+list(REMOVE_ITEM SOURCE_FILES "${CMAKE_CURRENT_SOURCE_DIR}/src/brain_tree.cpp")
 add_executable(brain_node ${SOURCE_FILES})
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-narrowing -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers -Wno-unused-variable")
 
-target_link_libraries(brain_node rerun_sdk ${backward_ros_LIBRARIES})
+# target_link_libraries(brain_node rerun_sdk ${backward_ros_LIBRARIES})  # Removed rerun
+target_link_libraries(brain_node ${backward_ros_LIBRARIES})
 ament_target_dependencies(brain_node rclcpp std_msgs sensor_msgs geometry_msgs
-  OpenCV EIGEN3 behaviortree_cpp
+  OpenCV EIGEN3
+  # behaviortree_cpp  # Removed behavior tree
   booster_msgs booster_interface game_controller_interface vision_interface)
 
 target_include_directories(brain_node PUBLIC
@@ -48,7 +52,7 @@ install(DIRECTORY launch
 install(DIRECTORY config
   DESTINATION share/${PROJECT_NAME})
 
-install(DIRECTORY behavior_trees
-  DESTINATION share/${PROJECT_NAME})
+# install(DIRECTORY behavior_trees  # Removed behavior trees directory
+#   DESTINATION share/${PROJECT_NAME})
 
 ament_package()

@@ -2,11 +2,12 @@
 
 #include <string>
 #include <rclcpp/rclcpp.hpp>
-#include <rerun.hpp>
+// #include <rerun.hpp>  // Removed rerun dependency
 #include <opencv2/opencv.hpp>
 #include <std_msgs/msg/string.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/pose_stamped.hpp>
 #include <vision_interface/msg/detections.hpp>
 #include <game_controller_interface/msg/game_control_data.hpp>
 #include <booster/robot/b1/b1_api_const.hpp>
@@ -37,7 +38,7 @@ class Brain : public rclcpp::Node
 public:
     // The BrainConfig object, which mainly contains the configuration values (static) required at runtime.
     std::shared_ptr<BrainConfig> config;
-    // The BrainLog object, which encapsulates the operations related to rerun logs.
+    // The BrainLog object, which encapsulates the operations related to logging (rerun disabled).
     std::shared_ptr<BrainLog> log;
     // The BrainData object, where all the runtime values of the Brain are stored.
     std::shared_ptr<BrainData> data;
@@ -45,7 +46,7 @@ public:
     std::shared_ptr<RobotClient> client;
     // The locator object.
     std::shared_ptr<Locator> locator;
-    // The BrainTree object, which contains the operations related to the BehaviorTree.
+    // The BrainTree object, which contains the operations related to the BehaviorTree (disabled).
     std::shared_ptr<BrainTree> tree;
     // The BrainCommunication object, which contains the operations related to communication each other and to GameController.
     std::shared_ptr<BrainCommunication> communication;
@@ -78,6 +79,9 @@ private:
 
     void updateMemory();
 
+    // Process external action decision from your decision-making package
+    void processExternalActionDecision();
+
     // ------------------------------------------------------ SUB CALLBACKS ------------------------------------------------------
     void joystickCallback(const booster_interface::msg::RemoteControllerState &msg);
     void gameControlCallback(const game_controller_interface::msg::GameControlData &msg);
@@ -86,12 +90,17 @@ private:
     void odometerCallback(const booster_interface::msg::Odometer &msg);
     void lowStateCallback(const booster_interface::msg::LowState &msg);
     void headPoseCallback(const geometry_msgs::msg::Pose &msg);
+    void externalActionDecisionCallback(const std_msgs::msg::String &msg);
     vector<GameObject> getGameObjects(const vision_interface::msg::Detections &msg);
     void detectProcessBalls(const vector<GameObject> &ballObjs);
     void detectProcessMarkings(const vector<GameObject> &markingObjs);
     // 处理跌到爬起状态信息
     void recoveryStateCallback(const booster_interface::msg::RawBytesMsg &msg);
 
+    // Parameters
+    bool use_behavior_tree_;
+
+    // Subscriptions
     rclcpp::Subscription<booster_interface::msg::RemoteControllerState>::SharedPtr joySubscription;
     rclcpp::Subscription<game_controller_interface::msg::GameControlData>::SharedPtr gameControlSubscription;
     rclcpp::Subscription<vision_interface::msg::Detections>::SharedPtr detectionsSubscription;
@@ -100,5 +109,16 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr imageSubscription;
     rclcpp::Subscription<geometry_msgs::msg::Pose>::SharedPtr headPoseSubscription;
     rclcpp::Subscription<booster_interface::msg::RawBytesMsg>::SharedPtr recoveryStateSubscription;
+    rclcpp::Subscription<std_msgs::msg::String>::SharedPtr externalActionDecisionSubscription;
+
+    // Publishers for external decision-making package
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr robotStatusPublisher;
+    rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr robotPosePublisher;
+    rclcpp::Publisher<vision_interface::msg::Detections>::SharedPtr visionDataPublisher;
+
+    // Publishing functions for external decision-making package
+    void publishRobotStatus();
+    void publishRobotPose();
+    void publishVisionData();
 
 };

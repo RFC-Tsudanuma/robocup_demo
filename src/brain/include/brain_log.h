@@ -1,15 +1,15 @@
 #pragma once
 
 #include <string>
-#include <rerun.hpp>
+// #include <rerun.hpp>  // Removed rerun dependency
 
 class Brain; // Forward declaration
 
 using namespace std;
 
 /**
- * Operations related to rerun logs are handled in this library.
- * If there are repetitive logs that need to be printed, the functions can be encapsulated within this class.
+ * Operations related to logging are handled in this library.
+ * Rerun dependency has been removed - this is now a stub for compatibility.
  */
 class BrainLog
 {
@@ -24,12 +24,11 @@ public:
 
     void setTimeSeconds(double seconds);
 
-    // Expose the same interface as rerun::RecordingStream
+    // Stub for compatibility - does nothing
     template <typename... Ts>
     inline void log(string_view entity_path, const Ts &...archetypes_or_collections) const
     {
-        if (enabled)
-            rerunLog.log(entity_path, archetypes_or_collections...);
+        // Rerun logging disabled - this is a stub
     }
 
     void logToScreen(string logPath, string text, u_int32_t color, double padding = 0.0);
@@ -42,5 +41,4 @@ public:
 private:
     bool enabled;
     Brain *brain;
-    rerun::RecordingStream rerunLog;
 };

@@ -47,20 +47,8 @@ int RobotClient::enterDamping()
 
 int RobotClient::setVelocity(double x, double y, double theta, bool applyMinX, bool applyMinY, bool applyMinTheta)
 {
-    brain->log->setTimeNow();
-    brain->log->log("RobotClient/setVelocity_in",
-                    rerun::TextLog(format("vx: %.2f  vy: %.2f  vtheta: %.2f", x, y, theta)));
-
-    rerun::Collection<rerun::Vec2D> vxLine = {{0, 0}, {x, 0}};
-    rerun::Collection<rerun::Vec2D> vyLine = {{0, 0}, {0, -y}};
-    rerun::Collection<rerun::Vec2D> vthetaLine = {{0, 0}, {2.0 * cos(-theta), 2.0 * sin(-theta)}};
-
-    brain->log->log("robotframe/velocity",
-                    rerun::LineStrips2D({vxLine, vyLine, vthetaLine})
-                        .with_colors({0xFF0000FF, 0x00FF00FF, 0x0000FFFF})
-                        .with_radii({0.05, 0.05, 0.02})
-                        .with_draw_order(1.0));
-
+    // Removed rerun logging - just print debug info
+    prtDebug(format("Set velocity: vx=%.2f  vy=%.2f  vtheta=%.2f", x, y, theta));
 
     double minx = 0.05, miny = 0.08, mintheta = 0.05;
     if (applyMinX && fabs(x) < minx && fabs(x) > 1e-5)
@@ -73,8 +61,7 @@ int RobotClient::setVelocity(double x, double y, double theta, bool applyMinX, b
     y = cap(y, brain->config->vyLimit, -brain->config->vyLimit);
     theta = cap(theta, brain->config->vthetaLimit, -brain->config->vthetaLimit);
 
-    brain->log->log("RobotClient/setVelocity_out",
-                    rerun::TextLog(format("vx: %.2f  vy: %.2f  vtheta: %.2f", x, y, theta)));
+    prtDebug(format("Set velocity (after limits): vx=%.2f  vy=%.2f  vtheta=%.2f", x, y, theta));
 
     auto msg = booster_msgs::CreateMoveMsg(x, y, theta);
     publisher->publish(msg);

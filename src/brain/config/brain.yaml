@@ -19,3 +19,6 @@ brain_node:
       enable: false
       server_addr: "127.0.0.1:9876"
       img_interval: 1
+
+    # Behavior tree control
+    use_behavior_tree: false  # Set to false to disable behavior tree and use external decision-making package

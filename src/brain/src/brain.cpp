@@ -31,6 +31,9 @@ Brain::Brain() : rclcpp::Node("brain_node")
 
     // The tree_file_path is configured in launch.py and not placed in config.yaml.
     declare_parameter<string>("tree_file_path", "");
+    
+    // Parameter to enable/disable behavior tree
+    declare_parameter<bool>("use_behavior_tree", false);
 }
 
 void Brain::init()
@@ -49,7 +52,13 @@ void Brain::init()
 
     locator->init(config->fieldDimensions, 4, 0.5);
 
-    tree->init();
+    // Initialize behavior tree only if enabled
+    if (use_behavior_tree_) {
+        tree->init();
+        RCLCPP_INFO(get_logger(), "Behavior tree initialized and enabled");
+    } else {
+        RCLCPP_INFO(get_logger(), "Behavior tree disabled - using external decision-making package");
+    }
 
     client->init();
 
@@ -67,6 +76,15 @@ void Brain::init()
     imageSubscription = create_subscription<sensor_msgs::msg::Image>("/camera/camera/color/image_raw", 1, bind(&Brain::imageCallback, this, _1));
     headPoseSubscription = create_subscription<geometry_msgs::msg::Pose>("/head_pose", 1, bind(&Brain::headPoseCallback, this, _1));
     recoveryStateSubscription = create_subscription<booster_interface::msg::RawBytesMsg>("fall_down_recovery_state", 1, bind(&Brain::recoveryStateCallback, this, _1));
+
+    // External decision-making package interface
+    externalActionDecisionSubscription = create_subscription<std_msgs::msg::String>(
+        "/external_action_decision", 10, bind(&Brain::externalActionDecisionCallback, this, _1));
+    
+    // Publishers for external decision-making package
+    robotStatusPublisher = create_publisher<std_msgs::msg::String>("/robot_status", 10);
+    robotPosePublisher = create_publisher<geometry_msgs::msg::PoseStamped>("/robot_pose", 10);
+    visionDataPublisher = create_publisher<vision_interface::msg::Detections>("/vision_data", 10);
 
 }
 
@@ -88,6 +106,9 @@ void Brain::loadConfig()
     get_parameter("rerunLog.img_interval", config->rerunLogImgInterval);
 
     get_parameter("tree_file_path", config->treeFilePath);
+    
+    // Load behavior tree parameter
+    get_parameter("use_behavior_tree", use_behavior_tree_);
 
     // handle the parameters
     config->handle();
@@ -104,12 +125,22 @@ void Brain::loadConfig()
 void Brain::tick()
 {
     updateMemory();
-    tree->tick();
+    
+    // Only tick behavior tree if enabled
+    if (use_behavior_tree_) {
+        tree->tick();
+    } else {
+        // Process external action decisions when behavior tree is disabled
+        processExternalActionDecision();
+    }
 }
 
 void Brain::updateMemory()
 {
     updateBallMemory();
+
+    // Only update memory related to behavior tree if it's enabled
+    if (!use_behavior_tree_) { return; }
 
     static Point ballPos;
     static rclcpp::Time kickOffTime;
@@ -132,6 +163,9 @@ void Brain::updateMemory()
 
 void Brain::updateBallMemory()
 {
+    if (!data->ballDetected)
+        return;
+
     // update Pose to field from Pose to robot (based on odom)
     double xfr, yfr, thetafr; // fr = field to robot
     yfr = sin(data->robotPoseToField.theta) * data->robotPoseToField.x - cos(data->robotPoseToField.theta) * data->robotPoseToField.y;
@@ -143,27 +177,35 @@ void Brain::updateBallMemory()
         data->ball.posToRobot.x, data->ball.posToRobot.y, data->ball.posToRobot.z);
 
     data->ball.range = sqrt(data->ball.posToRobot.x * data->ball.posToRobot.x + data->ball.posToRobot.y * data->ball.posToRobot.y);
-    tree->setEntry<double>("ball_range", data->ball.range);
+    
+    // Only update behavior tree entries if it's enabled
+    if (use_behavior_tree_) {
+        tree->setEntry<double>("ball_range", data->ball.range);
+    }
+    
     data->ball.yawToRobot = atan2(data->ball.posToRobot.y, data->ball.posToRobot.x);
     data->ball.pitchToRobot = asin(config->robotHeight / data->ball.range);
 
     // mark ball as lost if long time no see
     if (get_clock()->now().seconds() - data->ball.timePoint.seconds() > config->memoryLength)
     {
-        tree->setEntry<bool>("ball_location_known", false);
+        if (use_behavior_tree_) {
+            tree->setEntry<bool>("ball_location_known", false);
+        }
         data->ballDetected = false;
     }
 
     // log mem ball pos
-    log->setTimeNow();
-    log->log("field/memball",
-             rerun::LineStrips2D({
-                                     rerun::Collection<rerun::Vec2D>{{data->ball.posToField.x - 0.2, -data->ball.posToField.y}, {data->ball.posToField.x + 0.2, -data->ball.posToField.y}},
-                                     rerun::Collection<rerun::Vec2D>{{data->ball.posToField.x, -data->ball.posToField.y - 0.2}, {data->ball.posToField.x, -data->ball.posToField.y + 0.2}},
-                                 })
-                 .with_colors({tree->getEntry<bool>("ball_location_known") ? 0xFFFFFFFF : 0xFF0000FF})
-                 .with_radii({0.005})
-                 .with_draw_order(30));
+    // Removed rerun logging - just keep the logic
+    // log->setTimeNow();
+    // log->log("field/memball",
+    //          rerun::LineStrips2D({
+    //                                  rerun::Collection<rerun::Vec2D>{{data->ball.posToField.x - 0.2, -data->ball.posToField.y}, {data->ball.posToField.x + 0.2, -data->ball.posToField.y}},
+    //                                  rerun::Collection<rerun::Vec2D>{{data->ball.posToField.x, -data->ball.posToField.y - 0.2}, {data->ball.posToField.x, -data->ball.posToField.y + 0.2}},
+    //                              })
+    //                  .with_colors({use_behavior_tree_ && tree->getEntry<bool>("ball_location_known") ? 0xFFFFFFFF : 0xFF0000FF})
+    //                  .with_radii({0.005})
+    //                  .with_draw_order(30));
 }
 
 vector<double> Brain::getGoalPostAngles(const double margin)
@@ -243,10 +285,12 @@ void Brain::joystickCallback(const booster_interface::msg::RemoteControllerState
     {
         if (joy.b)
         {
-            tree->setEntry<bool>("B_pressed", true);
+            if (use_behavior_tree_) {
+                tree->setEntry<bool>("B_pressed", true);
+            }
             prtDebug("B is pressed");
         }
-        else if (!joy.b && tree->getEntry<bool>("B_pressed"))
+        else if (!joy.b && use_behavior_tree_ && tree->getEntry<bool>("B_pressed"))
         {
             tree->setEntry<bool>("B_pressed", false);
             prtDebug("B is released");
@@ -272,26 +316,34 @@ void Brain::joystickCallback(const booster_interface::msg::RemoteControllerState
 
         if (joy.x)
         {
-            tree->setEntry<int>("control_state", 1);
+            if (use_behavior_tree_) {
+                tree->setEntry<int>("control_state", 1);
+            }
             client->setVelocity(0., 0., 0.);
             client->moveHead(0., 0.);
             prtDebug("State => 1: CANCEL");
         }
         else if (joy.a)
         {
-            tree->setEntry<int>("control_state", 2);
-            tree->setEntry<bool>("odom_calibrated", false);
+            if (use_behavior_tree_) {
+                tree->setEntry<int>("control_state", 2);
+                tree->setEntry<bool>("odom_calibrated", false);
+            }
             prtDebug("State => 2: RECALIBRATE");
         }
         else if (joy.b)
         {
-            tree->setEntry<int>("control_state", 3);
+            if (use_behavior_tree_) {
+                tree->setEntry<int>("control_state", 3);
+            }
             prtDebug("State => 3: ACTION");
         }
         else if (joy.y)
         {
-            string curRole = tree->getEntry<string>("player_role");
-            curRole == "striker" ? tree->setEntry<string>("player_role", "goal_keeper") : tree->setEntry<string>("player_role", "striker");
+            if (use_behavior_tree_) {
+                string curRole = tree->getEntry<string>("player_role");
+                curRole == "striker" ? tree->setEntry<string>("player_role", "goal_keeper") : tree->setEntry<string>("player_role", "striker");
+            }
             prtDebug("SWITCH ROLE");
         }
     }
@@ -299,7 +351,7 @@ void Brain::joystickCallback(const booster_interface::msg::RemoteControllerState
 
 void Brain::gameControlCallback(const game_controller_interface::msg::GameControlData &msg)
 {
-    auto lastGameState = tree->getEntry<string>("gc_game_state");
+    auto lastGameState = use_behavior_tree_ ? tree->getEntry<string>("gc_game_state") : "";
     vector<string> gameStateMap = {
         "INITIAL", // Initialization state, players are ready outside the field.
         "READY",   // Ready state, players enter the field and walk to their starting positions.
@@ -308,17 +360,31 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
         "END"      // The game is over.
     };
     string gameState = gameStateMap[static_cast<int>(msg.state)];
-    tree->setEntry<string>("gc_game_state", gameState);
+    
+    if (use_behavior_tree_) {
+        tree->setEntry<string>("gc_game_state", gameState);
+    }
+    
     bool isKickOffSide = (msg.kick_off_team == config->teamId);
-    tree->setEntry<bool>("gc_is_kickoff_side", isKickOffSide);
+    
+    if (use_behavior_tree_) {
+        tree->setEntry<bool>("gc_is_kickoff_side", isKickOffSide);
+    }
 
     string gameSubStateType = static_cast<int>(msg.secondary_state) == 0 ? "NONE" : "FREE_KICK";
     vector<string> gameSubStateMap = {"STOP", "GET_READY", "SET"};
     string gameSubState = gameSubStateMap[static_cast<int>(msg.secondary_state_info[1])];
-    tree->setEntry<string>("gc_game_sub_state_type", gameSubStateType);
-    tree->setEntry<string>("gc_game_sub_state", gameSubState);
+    
+    if (use_behavior_tree_) {
+        tree->setEntry<string>("gc_game_sub_state_type", gameSubStateType);
+        tree->setEntry<string>("gc_game_sub_state", gameSubState);
+    }
+    
     bool isSubStateKickOffSide = (static_cast<int>(msg.secondary_state_info[0]) == config->teamId);
-    tree->setEntry<bool>("gc_is_sub_state_kickoff_side", isSubStateKickOffSide);
+    
+    if (use_behavior_tree_) {
+        tree->setEntry<bool>("gc_is_sub_state_kickoff_side", isSubStateKickOffSide);
+    }
 
     game_controller_interface::msg::TeamInfo myTeamInfo;
     if (msg.teams[0].team_number == config->teamId)
@@ -341,17 +407,24 @@ void Brain::gameControlCallback(const game_controller_interface::msg::GameContro
     data->penalty[2] = static_cast<int>(myTeamInfo.players[2].penalty);
     data->penalty[3] = static_cast<int>(myTeamInfo.players[3].penalty);
     double isUnderPenalty = (data->penalty[config->playerId] != 0);
-    tree->setEntry<bool>("gc_is_under_penalty", isUnderPenalty);
+    
+    if (use_behavior_tree_) {
+        tree->setEntry<bool>("gc_is_under_penalty", isUnderPenalty);
+    }
 
     int curScore = static_cast<int>(myTeamInfo.score);
     if (curScore > data->lastScore)
     {
-        tree->setEntry<bool>("we_just_scored", true);
+        if (use_behavior_tree_) {
+            tree->setEntry<bool>("we_just_scored", true);
+        }
         data->lastScore = curScore;
     }
     if (gameState == "SET")
     {
-        tree->setEntry<bool>("we_just_scored", false);
+        if (use_behavior_tree_) {
+            tree->setEntry<bool>("we_just_scored", false);
+        }
     }
 }
 
@@ -371,7 +444,7 @@ void Brain::detectionsCallback(const vision_interface::msg::Detections &msg)
         {
             persons.push_back(obj);
 
-            if (tree->getEntry<bool>("treat_person_as_robot"))
+            if (use_behavior_tree_ && tree->getEntry<bool>("treat_person_as_robot"))
                 robots.push_back(obj);
         }
         if (obj.label == "Opponent")
@@ -383,71 +456,72 @@ void Brain::detectionsCallback(const vision_interface::msg::Detections &msg)
     detectProcessBalls(balls);
     detectProcessMarkings(markings);
 
-    if (!log->isEnabled())
-        return;
+    // Removed rerun logging - just keep the logic
+    // if (!log->isEnabled())
+    //     return;
 
     // log detection boxes to rerun
-    auto detection_time_stamp = msg.header.stamp;
-    rclcpp::Time timePoint(detection_time_stamp.sec, detection_time_stamp.nanosec);
-    auto now = get_clock()->now();
+    // auto detection_time_stamp = msg.header.stamp;
+    // rclcpp::Time timePoint(detection_time_stamp.sec, detection_time_stamp.nanosec);
+    // auto now = get_clock()->now();
 
-    map<std::string, rerun::Color> detectColorMap = {
-        {"LCross", rerun::Color(0xFFFF00FF)},
-        {"TCross", rerun::Color(0x00FF00FF)},
-        {"XCross", rerun::Color(0x0000FFFF)},
-        {"Person", rerun::Color(0xFF00FFFF)},
-        {"Goalpost", rerun::Color(0x00FFFFFF)},
-        {"Opponent", rerun::Color(0xFF0000FF)},
-    };
+    // map<std::string, rerun::Color> detectColorMap = {
+    //     {"LCross", rerun::Color(0xFFFF00FF)},
+    //     {"TCross", rerun::Color(0x00FF00FF)},
+    //     {"XCross", rerun::Color(0x0000FFFF)},
+    //     {"Person", rerun::Color(0xFF00FFFF)},
+    //     {"Goalpost", rerun::Color(0x00FFFFFF)},
+    //     {"Opponent", rerun::Color(0xFF0000FF)},
+    // };
 
-    // for logging boundingBoxes
-    vector<rerun::Vec2D> mins;
-    vector<rerun::Vec2D> sizes;
-    vector<rerun::Text> labels;
-    vector<rerun::Color> colors;
+    // // for logging boundingBoxes
+    // vector<rerun::Vec2D> mins;
+    // vector<rerun::Vec2D> sizes;
+    // vector<rerun::Text> labels;
+    // vector<rerun::Color> colors;
 
-    // for logging marker points in robot frame
-    vector<rerun::Vec2D> points;
-    vector<rerun::Vec2D> points_r; // robot frame
+    // // for logging marker points in robot frame
+    // vector<rerun::Vec2D> points;
+    // vector<rerun::Vec2D> points_r; // robot frame
 
-    for (int i = 0; i < gameObjects.size(); i++)
-    {
-        auto obj = gameObjects[i];
-        auto label = obj.label;
-        labels.push_back(rerun::Text(format("%s x:%.2f y:%.2f c:%.2f", obj.label.c_str(), obj.posToRobot.x, obj.posToRobot.y, obj.confidence)));
-        points.push_back(rerun::Vec2D{obj.posToField.x, -obj.posToField.y});
-        points_r.push_back(rerun::Vec2D{obj.posToRobot.x, -obj.posToRobot.y});
-        mins.push_back(rerun::Vec2D{obj.boundingBox.xmin, obj.boundingBox.ymin});
-        sizes.push_back(rerun::Vec2D{obj.boundingBox.xmax - obj.boundingBox.xmin, obj.boundingBox.ymax - obj.boundingBox.ymin});
+    // for (int i = 0; i < gameObjects.size(); i++)
+    // {
+    //     auto obj = gameObjects[i];
+    //     auto label = obj.label;
+    //     labels.push_back(rerun::Text(format("%s x:%.2f y:%.2f c:%.2f", obj.label.c_str(), obj.posToRobot.x, obj.posToRobot.y, obj.confidence)));
+    //     points.push_back(rerun::Vec2D{obj.posToField.x, -obj.posToField.y});
+    //     points_r.push_back(rerun::Vec2D{obj.posToRobot.x, -obj.posToRobot.y});
+    //     mins.push_back(rerun::Vec2D{obj.boundingBox.xmin, obj.boundingBox.ymin});
+    //     sizes.push_back(rerun::Vec2D{obj.boundingBox.xmax - obj.boundingBox.xmin, obj.boundingBox.ymax - obj.boundingBox.ymin});
 
-        auto it = detectColorMap.find(label);
-        if (it != detectColorMap.end())
-        {
-            colors.push_back(detectColorMap[label]);
-        }
-        else
-        {
-            colors.push_back(rerun::Color(0xFFFFFFFF));
-        }
-    }
+    //     auto it = detectColorMap.find(label);
+    //     if (it != detectColorMap.end())
+    //     {
+    //         colors.push_back(detectColorMap[label]);
+    //     }
+    //     else
+    //     {
+    //         colors.push_back(rerun::Color(0xFFFFFFFF));
+    //     }
+    // }
 
-    double time = msg.header.stamp.sec + static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
-    log->setTimeSeconds(time);
-    log->log("image/detection_boxes",
-             rerun::Boxes2D::from_mins_and_sizes(mins, sizes)
-                 .with_labels(labels)
-                 .with_colors(colors));
+    // double time = msg.header.stamp.sec + static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
+    // log->setTimeSeconds(time);
+    // log->log("image/detection_boxes",
+    //          rerun::Boxes2D::from_mins_and_sizes(mins, sizes)
+    //              .with_labels(labels)
+    //              .with_colors(colors));
 
-    log->log("field/detection_points",
-             rerun::Points2D(points)
-                 .with_colors(colors)
-             // .with_labels(labels)
-    );
-    log->log("robotframe/detection_points",
-             rerun::Points2D(points_r)
-                 .with_colors(colors)
-             // .with_labels(labels)
-    );
+    // log->log("field/detection_points",
+    //          rerun::Points2D(points)
+    //              .with_colors(colors)
+    //          // .with_labels(labels)
+    // );
+    // log->log("robotframe/detection_points",
+    //          rerun::Points2D(points_r)
+    //              .with_colors(colors)
+    //          // .with_labels(labels)
+    // );
 }
 
 void Brain::odometerCallback(const booster_interface::msg::Odometer &msg)
@@ -462,11 +536,12 @@ void Brain::odometerCallback(const booster_interface::msg::Odometer &msg)
         data->odomToField.x, data->odomToField.y, data->odomToField.theta,
         data->robotPoseToField.x, data->robotPoseToField.y, data->robotPoseToField.theta);
 
-    log->setTimeNow();
-    log->log("field/robot",
-             rerun::Points2D({{data->robotPoseToField.x, -data->robotPoseToField.y}, {data->robotPoseToField.x + 0.1 * cos(data->robotPoseToField.theta), -data->robotPoseToField.y - 0.1 * sin(data->robotPoseToField.theta)}})
-                 .with_radii({0.2, 0.1})
-                 .with_colors({0xFF6666FF, 0xFF0000FF}));
+    // Removed rerun logging - just keep the logic
+    // log->setTimeNow();
+    // log->log("field/robot",
+    //          rerun::Points2D({{data->robotPoseToField.x, -data->robotPoseToField.y}, {data->robotPoseToField.x + 0.1 * cos(data->robotPoseToField.theta), -data->robotPoseToField.y - 0.1 * sin(data->robotPoseToField.theta)}})
+    //              .with_radii({0.2, 0.1})
+    //              .with_colors({0xFF6666FF, 0xFF0000FF}));
 }
 
 void Brain::lowStateCallback(const booster_interface::msg::LowState &msg)
@@ -474,41 +549,40 @@ void Brain::lowStateCallback(const booster_interface::msg::LowState &msg)
     data->headYaw = msg.motor_state_serial[0].q;
     data->headPitch = msg.motor_state_serial[1].q;
 
-    log->setTimeNow();
+    // Removed rerun logging - just keep the logic
+    // log->setTimeNow();
 
-    log->log("low_state_callback/imu/rpy/roll", rerun::Scalar(msg.imu_state.rpy[0]));
-    log->log("low_state_callback/imu/rpy/pitch", rerun::Scalar(msg.imu_state.rpy[1]));
-    log->log("low_state_callback/imu/rpy/yaw", rerun::Scalar(msg.imu_state.rpy[2]));
-    log->log("low_state_callback/imu/acc/x", rerun::Scalar(msg.imu_state.acc[0]));
-    log->log("low_state_callback/imu/acc/y", rerun::Scalar(msg.imu_state.acc[1]));
-    log->log("low_state_callback/imu/acc/z", rerun::Scalar(msg.imu_state.acc[2]));
-    log->log("low_state_callback/imu/gyro/x", rerun::Scalar(msg.imu_state.gyro[0]));
-    log->log("low_state_callback/imu/gyro/y", rerun::Scalar(msg.imu_state.gyro[1]));
-    log->log("low_state_callback/imu/gyro/z", rerun::Scalar(msg.imu_state.gyro[2]));
+    // log->log("low_state_callback/imu/rpy/roll", rerun::Scalar(msg.imu_state.rpy[0]));
+    // log->log("low_state_callback/imu/rpy/pitch", rerun::Scalar(msg.imu_state.rpy[1]));
+    // log->log("low_state_callback/imu/rpy/yaw", rerun::Scalar(msg.imu_state.rpy[2]));
+    // log->log("low_state_callback/imu/acc/x", rerun::Scalar(msg.imu_state.acc[0]));
+    // log->log("low_state_callback/imu/acc/y", rerun::Scalar(msg.imu_state.acc[1]));
+    // log->log("low_state_callback/imu/acc/z", rerun::Scalar(msg.imu_state.acc[2]));
+    // log->log("low_state_callback/imu/gyro/x", rerun::Scalar(msg.imu_state.gyro[0]));
+    // log->log("low_state_callback/imu/gyro/y", rerun::Scalar(msg.imu_state.gyro[1]));
+    // log->log("low_state_callback/imu/gyro/z", rerun::Scalar(msg.imu_state.gyro[2]));
 }
 
 void Brain::imageCallback(const sensor_msgs::msg::Image &msg)
 {
-    if (!config->rerunLogEnable)
-        return;
+    // Removed rerun logging - just keep the logic
+    // static int counter = 0;
+    // counter++;
+    // if (counter % config->rerunLogImgInterval == 0)
+    // {
 
-    static int counter = 0;
-    counter++;
-    if (counter % config->rerunLogImgInterval == 0)
-    {
+    //     cv::Mat imageBGR(msg.height, msg.width, CV_8UC3, const_cast<uint8_t *>(msg.data.data()));
+    //     cv::Mat imageRGB;
+    //     cv::cvtColor(imageBGR, imageRGB, cv::COLOR_BGR2RGB);
 
-        cv::Mat imageBGR(msg.height, msg.width, CV_8UC3, const_cast<uint8_t *>(msg.data.data()));
-        cv::Mat imageRGB;
-        cv::cvtColor(imageBGR, imageRGB, cv::COLOR_BGR2RGB);
+    //     std::vector<uint8_t> compressed_image;
+    //     std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 10};
+    //     cv::imencode(".jpg", imageRGB, compressed_image, compression_params);
 
-        std::vector<uint8_t> compressed_image;
-        std::vector<int> compression_params = {cv::IMWRITE_JPEG_QUALITY, 10};
-        cv::imencode(".jpg", imageRGB, compressed_image, compression_params);
-
-        double time = msg.header.stamp.sec + static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
-        log->setTimeSeconds(time);
-        log->log("image/img", rerun::EncodedImage::from_bytes(compressed_image));
-    }
+    //     double time = msg.header.stamp.sec + static_cast<double>(msg.header.stamp.nanosec) * 1e-9;
+    //     log->setTimeSeconds(time);
+    //     log->log("image/img", rerun::EncodedImage::from_bytes(compressed_image));
+    // }
 }
 
 void Brain::headPoseCallback(const geometry_msgs::msg::Pose &msg)
@@ -516,35 +590,35 @@ void Brain::headPoseCallback(const geometry_msgs::msg::Pose &msg)
 
     // --- for test:
     // if (config->rerunLogEnable) {
-    if (false)
-    {
-        auto x = msg.position.x;
-        auto y = msg.position.y;
-        auto z = msg.position.z;
+    // if (false)
+    // {
+    //     auto x = msg.position.x;
+    //     auto y = msg.position.y;
+    //     auto z = msg.position.z;
 
-        auto orientation = msg.orientation;
+    //     auto orientation = msg.orientation;
 
-        auto roll = rad2deg(atan2(2 * (orientation.w * orientation.x + orientation.y * orientation.z), 1 - 2 * (orientation.x * orientation.x + orientation.y * orientation.y)));
-        auto pitch = rad2deg(asin(2 * (orientation.w * orientation.y - orientation.z * orientation.x)));
-        auto yaw = rad2deg(atan2(2 * (orientation.w * orientation.z + orientation.x * orientation.y), 1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z)));
+    //     auto roll = rad2deg(atan2(2 * (orientation.w * orientation.x + orientation.y * orientation.z), 1 - 2 * (orientation.x * orientation.x + orientation.y * orientation.y)));
+    //     auto pitch = rad2deg(asin(2 * (orientation.w * orientation.y - orientation.z * orientation.x)));
+    //     auto yaw = rad2deg(atan2(2 * (orientation.w * orientation.z + orientation.x * orientation.y), 1 - 2 * (orientation.y * orientation.y + orientation.z * orientation.z)));
 
-        log->setTimeNow();
+    //     log->setTimeNow();
 
-        log->log("head_to_base/text",
-                 rerun::TextLog("x: " + to_string(x) + " y: " + to_string(y) + " z: " + to_string(z) + " roll: " + to_string(roll) + " pitch: " + to_string(pitch) + " yaw: " + to_string(yaw)));
-        log->log("head_to_base/x",
-                 rerun::Scalar(x));
-        log->log("head_to_base/y",
-                 rerun::Scalar(y));
-        log->log("head_to_base/z",
-                 rerun::Scalar(z));
-        log->log("head_to_base/roll",
-                 rerun::Scalar(roll));
-        log->log("head_to_base/pitch",
-                 rerun::Scalar(pitch));
-        log->log("head_to_base/yaw",
-                 rerun::Scalar(yaw));
-    }
+    //     log->log("head_to_base/text",
+    //              rerun::TextLog("x: " + to_string(x) + " y: " + to_string(y) + " z: " + to_string(z) + " roll: " + to_string(roll) + " pitch: " + to_string(pitch) + " yaw: " + to_string(yaw)));
+    //     log->log("head_to_base/x",
+    //              rerun::Scalar(x));
+    //     log->log("head_to_base/y",
+    //              rerun::Scalar(y));
+    //     log->log("head_to_base/z",
+    //              rerun::Scalar(z));
+    //     log->log("head_to_base/roll",
+    //              rerun::Scalar(roll));
+    //     log->log("head_to_base/pitch",
+    //              rerun::Scalar(pitch));
+    //     log->log("head_to_base/yaw",
+    //              rerun::Scalar(yaw));
+    // }
 }
 
 void Brain::recoveryStateCallback(const booster_interface::msg::RawBytesMsg &msg)
@@ -668,7 +742,9 @@ void Brain::detectProcessBalls(const vector<GameObject> &ballObjs)
 
         data->ball = ballObjs[indexRealBall];
 
-        tree->setEntry<bool>("ball_location_known", true);
+        if (use_behavior_tree_) {
+            tree->setEntry<bool>("ball_location_known", true);
+        }
     }
     else
     {
@@ -700,5 +776,123 @@ void Brain::detectProcessMarkings(const vector<GameObject> &markingObjs)
             continue;
 
         data->markings.push_back(marking);
+    }
+}
+
+void Brain::processExternalActionDecision()
+{
+    // Publish robot status and sensor data for external decision-making package
+    publishRobotStatus();
+    publishRobotPose();
+    publishVisionData();
+}
+
+void Brain::externalActionDecisionCallback(const std_msgs::msg::String &msg)
+{
+    // Parse external action decision message
+    // Expected format: JSON string with action, target_position, velocity, etc.
+    try {
+        // Simple parsing for now - can be extended with proper JSON parsing
+        std::string action_msg = msg.data;
+        
+        if (action_msg.find("set_velocity") != std::string::npos) {
+            // Extract velocity values from message
+            // Example: "set_velocity:0.5,0.0,0.0" -> vx=0.5, vy=0.0, vtheta=0.0
+            size_t pos = action_msg.find(":");
+            if (pos != std::string::npos) {
+                std::string velocity_str = action_msg.substr(pos + 1);
+                std::stringstream ss(velocity_str);
+                std::string token;
+                std::vector<double> velocities;
+                
+                while (std::getline(ss, token, ',')) {
+                    velocities.push_back(std::stod(token));
+                }
+                
+                if (velocities.size() >= 3) {
+                    client->setVelocity(velocities[0], velocities[1], velocities[2]);
+                    RCLCPP_DEBUG(get_logger(), "Set velocity: vx=%.2f, vy=%.2f, vtheta=%.2f", 
+                                velocities[0], velocities[1], velocities[2]);
+                }
+            }
+        } else if (action_msg.find("move_head") != std::string::npos) {
+            // Extract head movement values
+            size_t pos = action_msg.find(":");
+            if (pos != std::string::npos) {
+                std::string head_str = action_msg.substr(pos + 1);
+                std::stringstream ss(head_str);
+                std::string token;
+                std::vector<double> head_angles;
+                
+                while (std::getline(ss, token, ',')) {
+                    head_angles.push_back(std::stod(token));
+                }
+                
+                if (head_angles.size() >= 2) {
+                    client->moveHead(head_angles[0], head_angles[1]);
+                    RCLCPP_DEBUG(get_logger(), "Move head: yaw=%.2f, pitch=%.2f", 
+                                head_angles[0], head_angles[1]);
+                }
+            }
+        } else if (action_msg.find("stop") != std::string::npos) {
+            client->setVelocity(0.0, 0.0, 0.0);
+            client->moveHead(0.0, 0.0);
+            RCLCPP_DEBUG(get_logger(), "Stop robot");
+        }
+        
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(get_logger(), "Failed to parse external action decision: %s", e.what());
+    }
+}
+
+void Brain::publishRobotStatus()
+{
+    auto status_msg = std::make_unique<std_msgs::msg::String>();
+    
+    // Create status message with robot information
+    std::ostringstream oss;
+    oss << "robot_status:{";
+    oss << "\"position\":{\"x\":" << data->robotPoseToField.x << ",\"y\":" << data->robotPoseToField.y << ",\"theta\":" << data->robotPoseToField.theta << "},";
+    oss << "\"ball_detected\":" << (data->ballDetected ? "true" : "false") << ",";
+    if (data->ballDetected) {
+        oss << "\"ball_position\":{\"x\":" << data->ball.posToField.x << ",\"y\":" << data->ball.posToField.y << "},";
+        oss << "\"ball_range\":" << data->ball.range << ",";
+    }
+    oss << "\"markings_count\":" << data->markings.size() << ",";
+    oss << "\"timestamp\":" << get_clock()->now().nanoseconds();
+    oss << "}";
+    
+    status_msg->data = oss.str();
+    robotStatusPublisher->publish(*status_msg);
+}
+
+void Brain::publishRobotPose()
+{
+    auto pose_msg = std::make_unique<geometry_msgs::msg::PoseStamped>();
+    
+    pose_msg->header.stamp = get_clock()->now();
+    pose_msg->header.frame_id = "map";
+    
+    pose_msg->pose.position.x = data->robotPoseToField.x;
+    pose_msg->pose.position.y = data->robotPoseToField.y;
+    pose_msg->pose.position.z = 0.0;
+    
+    // Convert theta to quaternion
+    double yaw = data->robotPoseToField.theta;
+    pose_msg->pose.orientation.x = 0.0;
+    pose_msg->pose.orientation.y = 0.0;
+    pose_msg->pose.orientation.z = sin(yaw / 2.0);
+    pose_msg->pose.orientation.w = cos(yaw / 2.0);
+    
+    robotPosePublisher->publish(*pose_msg);
+}
+
+void Brain::publishVisionData()
+{
+    // Publish vision data for external decision-making package
+    // This can be used to provide vision information to your decision-making package
+    if (detectionsSubscription) {
+        // The vision data is already being processed in detectionsCallback
+        // You can add additional processing here if needed
     }
 }

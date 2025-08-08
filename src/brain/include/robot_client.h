@@ -2,7 +2,7 @@
 
 #include <iostream>
 #include <string>
-#include <rerun.hpp>
+// #include <rerun.hpp>  // Removed rerun dependency
 
 #include <booster_msgs/msg/rpc_req_msg.hpp>
 
