@@ -18,13 +18,13 @@ def generate_launch_description():
                     "port": 3838,
 
                     # 是否开启 IP 白名单，开启后会忽略非白名单 IP 发的广播消息，默认不应该开启
-                    "enable_ip_white_list": True,
+                    "enable_ip_white_list": False,
 
                     # 只接收指定
                     "ip_white_list": [
                         "192.168.50.217",
-                        "192.168.31.2",
-                        "127.0.0.1"
+                        # "192.168.31.2",
+                        # "127.0.0.1"
                     ],
                 }
             ]
