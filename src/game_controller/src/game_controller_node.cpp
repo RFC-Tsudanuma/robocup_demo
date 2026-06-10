@@ -210,7 +210,6 @@ void GameControllerNode::handle_packet(RoboCupGameControlData &data, game_contro
         {
             msg.teams[i].players[j].penalty = data.teams[i].players[j].penalty;
             msg.teams[i].players[j].secs_till_unpenalised = data.teams[i].players[j].secsTillUnpenalised;
-            msg.teams[i].players[j].warnings = data.teams[i].players[j].warnings;
             msg.teams[i].players[j].cautions = data.teams[i].players[j].cautions;
         }
     }

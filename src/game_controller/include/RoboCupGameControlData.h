@@ -7,20 +7,20 @@
 #define GAMECONTROLLER_RETURN_PORT 3939
 
 #define GAMECONTROLLER_STRUCT_HEADER  "RGme"
-#define GAMECONTROLLER_STRUCT_VERSION 19
+#define GAMECONTROLLER_STRUCT_VERSION 20
 
 #define MAX_NUM_PLAYERS 20
 
-#define TEAM_BLUE   0
-#define TEAM_RED    1
-#define TEAM_YELLOW 2
-#define TEAM_BLACK  3
-#define TEAM_WHITE  4
-#define TEAM_GREEN  5
-#define TEAM_ORANGE 6
-#define TEAM_PURPLE 7
-#define TEAM_BROWN  8
-#define TEAM_GRAY   9
+#define TEAM_BLUE   0 // blue, cyan
+#define TEAM_RED    1 // red, magenta, pink
+#define TEAM_YELLOW 2 // yellow
+#define TEAM_BLACK  3 // black, dark gray
+#define TEAM_WHITE  4 // white
+#define TEAM_GREEN  5 // green
+#define TEAM_ORANGE 6 // orange
+#define TEAM_PURPLE 7 // purple, violet
+#define TEAM_BROWN  8 // brown
+#define TEAM_GRAY   9 // lighter gray
 
 #define COMPETITION_TYPE_SMALL  0
 #define COMPETITION_TYPE_MIDDLE 1
@@ -47,73 +47,91 @@
 
 #define KICKING_TEAM_NONE 255
 
-#define PENALTY_NONE                    0
-#define PENALTY_ILLEGAL_POSITIONING     1
-#define PENALTY_MOTION_IN_SET           2
-#define PENALTY_LOCAL_GAME_STUCK        3
-#define PENALTY_INCAPABLE_ROBOT         4
-#define PENALTY_PICK_UP                 5
-#define PENALTY_BALL_HOLDING            6
-#define PENALTY_LEAVING_THE_FIELD       7
-#define PENALTY_PLAYING_WITH_ARMS_HANDS 8
-#define PENALTY_PUSHING                 9
-#define PENALTY_SENT_OFF                10
-#define PENALTY_SUBSTITUTE              11
+#define PENALTY_NONE                          0
+#define PENALTY_ILLEGAL_POSITIONING           1
+#define PENALTY_MOTION_IN_SET                 2
+#define PENALTY_MOTION_IN_STOP                3
+#define PENALTY_LOCAL_GAME_STUCK              4
+#define PENALTY_INCAPABLE_ROBOT               5
+#define PENALTY_PICK_UP                       6
+#define PENALTY_BALL_HOLDING                  7
+#define PENALTY_LEAVING_THE_FIELD             8
+#define PENALTY_PLAYING_WITH_ARMS_HANDS       9
+#define PENALTY_PUSHING                       10
+#define PENALTY_CAUTIONED                     11
+#define PENALTY_SENT_OFF                      12
+#define PENALTY_SUBSTITUTE                    13
 
 struct RobotInfo
 {
-  uint8_t penalty;
-  uint8_t secsTillUnpenalised;
-  uint8_t warnings;
-  uint8_t cautions;
+  uint8_t penalty;             // penalty state of the player (PENALTY_NONE, etc)
+  uint8_t secsTillUnpenalised; // estimate of time till unpenalised
+  uint8_t cautions;            // number of cautions (yellow cards)
 };
 
 struct TeamInfo
 {
-  uint8_t teamNumber;
-  uint8_t fieldPlayerColour;
-  uint8_t goalkeeperColour;
-  uint8_t goalkeeper;
-  uint8_t score;
-  uint8_t penaltyShot;
-  uint16_t singleShots;
-  uint16_t messageBudget;
-  struct RobotInfo players[MAX_NUM_PLAYERS];
+  uint8_t teamNumber;                        // unique team number
+  uint8_t fieldPlayerColour;                 // colour of the field players (TEAM_BLUE, etc)
+  uint8_t goalkeeperColour;                  // colour of the goalkeeper (TEAM_BLUE, etc)
+  uint8_t goalkeeper;                        // player number of the goalkeeper (0-MAX_NUM_PLAYERS)
+  uint8_t score;                             // team's score
+  uint8_t penaltyShot;                       // penalty shot counter
+  uint16_t singleShots;                      // bits represent penalty shot success
+  uint16_t messageBudget;                    // number of team messages the team is allowed to send for the remainder of the game
+  struct RobotInfo players[MAX_NUM_PLAYERS]; // the team's players
 };
 
 struct RoboCupGameControlData
 {
-  char header[4];
-  uint8_t version;
-  uint8_t packetNumber;
-  uint8_t playersPerTeam;
-  uint8_t competitionType;
-  uint8_t stopped;
-  uint8_t gamePhase;
-  uint8_t state;
-  uint8_t setPlay;
-  uint8_t firstHalf;
-  uint8_t kickingTeam;
-  int16_t secsRemaining;
-  int16_t secondaryTime;
+  char header[4];           // header to identify the structure
+  uint8_t version;          // version of the data structure
+  uint8_t packetNumber;     // number incremented with each packet sent (with wraparound)
+  uint8_t playersPerTeam;   // the number of players on a team
+  uint8_t competitionType;  // type of the competition (COMPETITION_TYPE_SMALL, etc)
+  uint8_t stopped;          // 1 = play is currently stopped, 0 otherwise
+  uint8_t gamePhase;        // phase of the game (GAME_PHASE_NORMAL, etc)
+  uint8_t state;            // state of the game (STATE_INITIAL, etc)
+  uint8_t setPlay;          // active set play (SET_PLAY_NONE, etc)
+  uint8_t firstHalf;        // 1 = game in first half, 0 otherwise
+  uint8_t kickingTeam;      // the team number of the next team to kick-off, free kick etc, or KICKING_TEAM_NONE
+  int16_t secsRemaining;    // estimate of number of seconds remaining in the half
+  int16_t secondaryTime;    // number of seconds shown as secondary time (remaining ready, until free ball, etc)
   struct TeamInfo teams[2];
 };
 
-#define GAMECONTROLLER_RETURN_STRUCT_HEADER  "RGrt"
-#define GAMECONTROLLER_RETURN_STRUCT_VERSION 4
+// data structure header
+#define GAMECONTROLLER_RETURN_STRUCT_HEADER      "RGrt"
+#define GAMECONTROLLER_RETURN_STRUCT_VERSION     4
 
 struct RoboCupGameControlReturnData
 {
-  char header[4];
-  uint8_t version;
-  uint8_t playerNum;
-  uint8_t teamNum;
-  uint8_t fallen;
-  float pose[3];
-  float ballAge;
+  char header[4];     // "RGrt"
+  uint8_t version;    // has to be set to GAMECONTROLLER_RETURN_STRUCT_VERSION
+  uint8_t playerNum;  // player number starts with 1
+  uint8_t teamNum;    // team number
+  uint8_t fallen;     // 1 means that the robot is fallen, 0 means that the robot can play
+
+  // position and orientation of robot
+  // coordinates in millimeters
+  // 0,0 is in center of field
+  // +ve x-axis points towards the goal we are attempting to score on
+  // +ve y-axis is 90 degrees counter clockwise from the +ve x-axis
+  // angle in radians, 0 along the +x axis, increasing counter clockwise
+  float pose[3];         // x,y,theta
+
+  // ball information
+  float ballAge;         // seconds since this robot last saw the ball. -1.f if we haven't seen it
+
+  // position of ball relative to the robot
+  // coordinates in millimeters
+  // 0,0 is in center of the robot
+  // +ve x-axis points forward from the robot
+  // +ve y-axis is 90 degrees counter clockwise from the +ve x-axis
   float ball[2];
 
 #ifdef __cplusplus
+  // constructor
   RoboCupGameControlReturnData() :
     version(GAMECONTROLLER_RETURN_STRUCT_VERSION),
     playerNum(0),
@@ -133,4 +151,4 @@ struct RoboCupGameControlReturnData
 #endif
 };
 
-#endif
+#endif // ROBOCUPGAMECONTROLDATA_H

@@ -5,6 +5,6 @@ cd ..
 
 source ./install/setup.bash
 
-export FASTRTPS_DEFAULT_PROFILES_FILE=./configs/fastdds.xml
+# export FASTRTPS_DEFAULT_PROFILES_FILE=./configs/fastdds.xml
 
 ros2 launch game_controller launch.py
